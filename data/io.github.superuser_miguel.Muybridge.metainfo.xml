@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.superuser_miguel.Muybridge</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Muybridge</name>
+  <summary>Take still frames out of video</summary>
+
+  <description>
+    <p>
+      Muybridge pulls still images out of a video at whatever rate you ask for —
+      ten a second, one every few seconds, or anything in between. Point it at a
+      file, say how often to sample, and it writes a numbered sequence of PNG or
+      JPEG frames into the folder you choose.
+    </p>
+    <p>Along the way it can:</p>
+    <ul>
+      <li>Trim to a range, so only the part you care about is sampled</li>
+      <li>Show the video's size, codec, frame rate and length before you start</li>
+      <li>Estimate how many frames a job will write, before it writes any</li>
+      <li>Report live progress, and stop cleanly when you cancel</li>
+      <li>Name the sequence, choose the counter width, and add a suffix</li>
+    </ul>
+    <p>
+      ffmpeg does the work and is bundled with the app, so there is nothing to
+      install alongside it. Files are reached through the desktop portals: the
+      app sees the video you picked and the folder you chose, and nothing else.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.superuser_miguel.Muybridge.desktop</launchable>
+
+  <developer id="io.github.superuser_miguel">
+    <name>superuser-miguel</name>
+  </developer>
+
+  <url type="homepage">https://github.com/superuser-miguel/muybridge</url>
+  <url type="bugtracker">https://github.com/superuser-miguel/muybridge/issues</url>
+  <url type="vcs-browser">https://github.com/superuser-miguel/muybridge</url>
+
+  <content_rating type="oars-1.1"/>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#c0bfbc</color>
+    <color type="primary" scheme_preference="dark">#241f31</color>
+  </branding>
+
+  <releases>
+    <release version="0.1.0" date="2026-07-29">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

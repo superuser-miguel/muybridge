@@ -1,0 +1,111 @@
+# Flatpak manifest — Muybridge, a GTK4/libadwaita frame extractor (Rust / gtk4-rs)
+#
+# Build & run:
+#   flatpak-builder --user --install --force-clean build-dir io.github.superuser_miguel.Muybridge.yml
+#   flatpak run io.github.superuser_miguel.Muybridge
+#
+# Check the bundled engine without the UI:
+#   flatpak run --command=ffmpeg io.github.superuser_miguel.Muybridge -version
+
+id: io.github.superuser_miguel.Muybridge
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: muybridge
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/muybridge/cargo
+  # DEV manifest: cargo reaches crates.io at build time, so iteration doesn't
+  # need the crate graph re-vendored after every Cargo.lock change. A published
+  # bundle should be built from an offline release manifest instead (vendored
+  # cargo-sources.json, no network) — see PLAN.md §7.
+  build-args:
+    - --share=network
+
+finish-args:
+  # -- display / input ------------------------------------------------------
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc                       # required by the X11 fallback
+  - --device=dri                      # GPU rendering for GTK4/GSK
+
+  # NOTE deliberately ABSENT (portals-first):
+  #   --filesystem=home / host    -> the video and the output folder arrive
+  #                                  through the FileChooser portal, and the
+  #                                  app sees nothing else on disk
+  #   --share=network             -> nothing here talks to the network, and
+  #                                  ffmpeg is built with networking disabled
+
+modules:
+  # ---------------------------------------------------------------- ffmpeg
+  # The engine. Trimmed to what this app actually does: decode anything the
+  # user has, write PNG or JPEG image sequences. Everything else — muxers,
+  # other encoders, network protocols, avdevice, ffplay — is configured out,
+  # which keeps the build and the attack surface small.
+  #
+  # dav1d comes from the runtime (libdav1d.so.7 is in org.gnome.Platform//49,
+  # its headers in the Sdk), so AV1 decodes at a sensible speed. nasm is in the
+  # Sdk too, so the x86 assembly optimisations stay enabled.
+  #
+  # sha256 is of the official https://ffmpeg.org tarball. Bumping the version
+  # means recomputing it — ffmpeg.org publishes no .sha256 sidecar.
+  - name: ffmpeg
+    buildsystem: simple
+    build-commands:
+      - ./configure
+        --prefix=/app
+        --disable-static
+        --enable-shared
+        --disable-doc
+        --disable-debug
+        --disable-ffplay
+        --disable-avdevice
+        --disable-network
+        --disable-encoders
+        --enable-encoder=png,mjpeg
+        --disable-muxers
+        --enable-muxer=image2,image2pipe
+        --enable-libdav1d
+      - make -j $FLATPAK_BUILDER_N_JOBS
+      - make install
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/ffmpeg/examples
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+        sha256: 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+
+  # ---------------------------------------------------------------- blueprint
+  # Compiles .blp UI files at build time; not needed at runtime. The GNOME 49
+  # Sdk happens to ship 0.18.0 as well, but pinning it here keeps the build
+  # reproducible across runtime bumps.
+  - name: blueprint-compiler
+    buildsystem: meson
+    cleanup: ['*']
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/GNOME/blueprint-compiler.git
+        tag: v0.18.0
+
+  # ---------------------------------------------------------------- the app
+  # Meson drives the build and invokes cargo (GNOME Builder Rust-template
+  # pattern) so Blueprint compilation, GResource bundling, desktop/metainfo
+  # install and the cargo build all live in one build system.
+  - name: muybridge
+    buildsystem: meson
+    sources:
+      - type: dir
+        path: .
+        skip:
+          - .git
+          - .flatpak-builder
+          - target
+          - builddir
+          - build-dir
+          - build-flatpak

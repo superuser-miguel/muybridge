@@ -1,0 +1,230 @@
+// window.blp — the whole UI. Rust never builds widgets; it only reaches these
+// by id. Compile check: blueprint-compiler compile src/ui/window.blp
+//
+// One page, top to bottom in the order the job is described: which video,
+// which part of it, how many frames, and where they go. The bottom bar only
+// appears while ffmpeg is running.
+
+using Gtk 4.0;
+using Adw 1;
+
+template $MuybridgeWindow: Adw.ApplicationWindow {
+  title: _("Muybridge");
+  default-width: 720;
+  default-height: 800;
+
+  content: Adw.ToastOverlay toast_overlay {
+    child: Adw.ToolbarView {
+      [top]
+      Adw.HeaderBar {
+        [start]
+        Button extract_button {
+          label: _("Extract Frames");
+          sensitive: false;
+          styles ["suggested-action"]
+        }
+
+        [start]
+        Button cancel_button {
+          label: _("Cancel");
+          visible: false;
+          styles ["destructive-action"]
+        }
+
+        [end]
+        MenuButton {
+          icon-name: "open-menu-symbolic";
+          menu-model: primary_menu;
+          primary: true;
+          tooltip-text: _("Main Menu");
+        }
+      }
+
+      [top]
+      Adw.Banner result_banner {
+        revealed: false;
+      }
+
+      content: ScrolledWindow {
+        hscrollbar-policy: never;
+        vexpand: true;
+
+        child: Adw.Clamp {
+          maximum-size: 640;
+          margin-top: 24;
+          margin-bottom: 24;
+          margin-start: 12;
+          margin-end: 12;
+
+          child: Box settings_box {
+            orientation: vertical;
+            spacing: 18;
+
+            Adw.PreferencesGroup {
+              title: _("Video");
+
+              Adw.ActionRow video_row {
+                title: _("No video chosen");
+                subtitle: _("Click to pick the video to take frames from");
+                activatable: true;
+
+                [suffix]
+                Image {
+                  icon-name: "document-open-symbolic";
+                  valign: center;
+                }
+              }
+
+              Adw.ActionRow details_row {
+                title: _("Details");
+                subtitle: "—";
+                subtitle-selectable: true;
+              }
+            }
+
+            Adw.PreferencesGroup {
+              title: _("Range");
+              description: _("Off takes frames from the whole video");
+
+              Adw.SwitchRow trim_row {
+                title: _("Trim to a range");
+              }
+
+              Adw.EntryRow start_row {
+                title: _("Start");
+                text: "00:00:00.000";
+                visible: bind trim_row.active;
+              }
+
+              Adw.EntryRow end_row {
+                title: _("End");
+                visible: bind trim_row.active;
+              }
+            }
+
+            Adw.PreferencesGroup {
+              title: _("Frames");
+
+              Adw.SpinRow fps_row {
+                title: _("Frames per second");
+                subtitle: _("How often to sample the video, not its own frame rate");
+                digits: 2;
+
+                adjustment: Adjustment {
+                  lower: 0.01;
+                  upper: 240;
+                  value: 3.33;
+                  step-increment: 0.01;
+                  page-increment: 1;
+                };
+              }
+
+              Adw.ComboRow format_row {
+                title: _("Format");
+
+                model: StringList {
+                  strings [
+                    "PNG",
+                    "JPEG",
+                  ]
+                };
+              }
+
+              Adw.SpinRow quality_row {
+                title: _("JPEG quality");
+                subtitle: _("2 is best quality, 31 is smallest file");
+                visible: false;
+
+                adjustment: Adjustment {
+                  lower: 2;
+                  upper: 31;
+                  value: 3;
+                  step-increment: 1;
+                  page-increment: 5;
+                };
+              }
+            }
+
+            Adw.PreferencesGroup {
+              title: _("Output");
+
+              Adw.ActionRow folder_row {
+                title: _("Folder");
+                subtitle: _("Not chosen");
+                activatable: true;
+
+                [suffix]
+                Image {
+                  icon-name: "folder-open-symbolic";
+                  valign: center;
+                }
+              }
+
+              Adw.EntryRow stem_row {
+                title: _("Name");
+              }
+
+              Adw.EntryRow suffix_row {
+                title: _("Suffix (after the counter)");
+              }
+
+              Adw.SpinRow digits_row {
+                title: _("Counter digits");
+
+                adjustment: Adjustment {
+                  lower: 1;
+                  upper: 9;
+                  value: 4;
+                  step-increment: 1;
+                  page-increment: 1;
+                };
+              }
+
+              Adw.SwitchRow overwrite_row {
+                title: _("Overwrite existing frames");
+                active: true;
+              }
+
+              Adw.ActionRow preview_row {
+                title: _("Will write");
+                subtitle: "—";
+                subtitle-selectable: true;
+              }
+            }
+          };
+        };
+      };
+
+      [bottom]
+      Box progress_box {
+        visible: false;
+        orientation: vertical;
+        spacing: 6;
+        margin-top: 6;
+        margin-bottom: 12;
+        margin-start: 18;
+        margin-end: 18;
+
+        ProgressBar progress_bar {
+          show-text: true;
+          styles ["muybridge-progress"]
+        }
+
+        Label status_label {
+          xalign: 0;
+          ellipsize: end;
+          styles ["dim-label"]
+        }
+      }
+    };
+  };
+}
+
+menu primary_menu {
+  section {
+    item {
+      label: _("_About Muybridge");
+      action: "app.about";
+    }
+  }
+}

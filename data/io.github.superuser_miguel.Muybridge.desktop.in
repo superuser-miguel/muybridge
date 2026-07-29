@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Muybridge
+GenericName=Frame Extractor
+Comment=Take still frames out of video at any rate you choose
+Type=Application
+Exec=muybridge
+Icon=@app_id@
+Terminal=false
+Categories=AudioVideo;Video;Utility;GTK;
+Keywords=frames;stills;ffmpeg;video;extract;screenshot;snapshot;sequence;
+StartupNotify=true

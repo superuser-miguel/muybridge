@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="backdrop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4d4453"/>
+      <stop offset="1" stop-color="#241f31"/>
+    </linearGradient>
+    <linearGradient id="strip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#deddda"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#backdrop)"/>
+
+  <!-- The filmstrip: two sprocket rails with three frames between them. -->
+  <rect x="24" y="22" width="80" height="84" rx="8" fill="url(#strip)"/>
+
+  <g fill="#241f31">
+    <rect x="28" y="28" width="7" height="7" rx="2"/>
+    <rect x="28" y="41" width="7" height="7" rx="2"/>
+    <rect x="28" y="54" width="7" height="7" rx="2"/>
+    <rect x="28" y="67" width="7" height="7" rx="2"/>
+    <rect x="28" y="80" width="7" height="7" rx="2"/>
+    <rect x="28" y="93" width="7" height="7" rx="2"/>
+
+    <rect x="93" y="28" width="7" height="7" rx="2"/>
+    <rect x="93" y="41" width="7" height="7" rx="2"/>
+    <rect x="93" y="54" width="7" height="7" rx="2"/>
+    <rect x="93" y="67" width="7" height="7" rx="2"/>
+    <rect x="93" y="80" width="7" height="7" rx="2"/>
+    <rect x="93" y="93" width="7" height="7" rx="2"/>
+  </g>
+
+  <!-- Three sampled frames; the middle one is the one being taken. -->
+  <rect x="40" y="28" width="48" height="22" rx="3" fill="#5e5c64"/>
+  <rect x="40" y="53" width="48" height="22" rx="3" fill="#1c71d8"/>
+  <rect x="40" y="78" width="48" height="22" rx="3" fill="#5e5c64"/>
+</svg>
