@@ -97,6 +97,7 @@ fn setup_actions(app: &adw::Application) {
     ));
     app.add_action(&about);
 
+    app.set_accels_for_action("win.new-job", &["<Primary>n"]);
     app.set_accels_for_action("window.close", &["<Primary>w"]);
     app.set_accels_for_action("app.quit", &["<Primary>q"]);
 

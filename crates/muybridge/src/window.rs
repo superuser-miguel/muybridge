@@ -29,6 +29,16 @@ const VIDEO_PATTERNS: &[&str] = &[
     "*.ts", "*.m2ts", "*.ogv", "*.3gp",
 ];
 
+// Starting state, restored by "New Job". These must match the values the
+// Blueprint sets up, or a reset window would differ from a fresh one.
+const EMPTY_VIDEO_TITLE: &str = "No video chosen";
+const EMPTY_VIDEO_SUBTITLE: &str = "Click to pick the video to take frames from";
+const EMPTY_DETAILS: &str = "—";
+const DEFAULT_START: &str = "00:00:00.000";
+const DEFAULT_FPS: f64 = 3.33;
+const DEFAULT_QUALITY: f64 = 3.0;
+const DEFAULT_DIGITS: f64 = 4.0;
+
 mod imp {
     use super::*;
     use std::cell::RefCell;
@@ -154,6 +164,7 @@ impl MuybridgeWindow {
         }
         self.update_output_row();
         self.sync_format_rows();
+        self.setup_actions();
 
         imp.video_row.connect_activated(glib::clone!(
             #[weak(rename_to = win)]
@@ -216,6 +227,68 @@ impl MuybridgeWindow {
             move |_| win.update_preview()
         ));
 
+        self.update_preview();
+    }
+
+    fn setup_actions(&self) {
+        // "New Job" (win.new-job) — same action name and menu placement as
+        // Foresight's, so the two apps behave alike.
+        let new_job = gio::SimpleAction::new("new-job", None);
+        new_job.connect_activate(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_, _| win.clear_job()
+        ));
+        self.add_action(&new_job);
+    }
+
+    /// Reset the form for a fresh job. Ignored while a run is live, so it can
+    /// never yank the settings out from under a running ffmpeg.
+    ///
+    /// The **output folder deliberately survives**, unlike Foresight's
+    /// destination. There, a new sync usually has a new destination; here the
+    /// video changes and the dump folder does not — and in the sandbox the
+    /// folder is the one setting that costs a portal round-trip to re-pick.
+    fn clear_job(&self) {
+        let imp = self.imp();
+        if imp.state.borrow().runner.is_some() {
+            return;
+        }
+
+        // The video and everything derived from it.
+        {
+            let mut state = imp.state.borrow_mut();
+            state.video = None;
+            state.probe = None;
+            state.run_span = None;
+            state.run_estimate = None;
+        }
+        imp.video_row.set_title(EMPTY_VIDEO_TITLE);
+        imp.video_row.set_subtitle(EMPTY_VIDEO_SUBTITLE);
+        imp.details_row.set_subtitle(EMPTY_DETAILS);
+
+        // Range.
+        imp.trim_row.set_active(false);
+        imp.start_row.set_text(DEFAULT_START);
+        imp.end_row.set_text("");
+
+        // Frames.
+        imp.fps_row.set_value(DEFAULT_FPS);
+        imp.format_row.set_selected(Format::Png.index());
+        imp.quality_row.set_value(DEFAULT_QUALITY);
+
+        // Output — the folder stays, see above.
+        imp.stem_row.set_text("");
+        imp.suffix_row.set_text("");
+        imp.digits_row.set_value(DEFAULT_DIGITS);
+        imp.overwrite_row.set_active(true);
+
+        // Whatever the last run left on screen.
+        imp.result_banner.set_revealed(false);
+        imp.progress_bar.set_fraction(0.0);
+        imp.status_label.set_label("");
+
+        self.sync_format_rows();
         self.update_preview();
     }
 

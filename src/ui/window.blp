@@ -223,6 +223,13 @@ template $MuybridgeWindow: Adw.ApplicationWindow {
 menu primary_menu {
   section {
     item {
+      label: _("_New Job");
+      action: "win.new-job";
+    }
+  }
+
+  section {
+    item {
       label: _("_About Muybridge");
       action: "app.about";
     }
