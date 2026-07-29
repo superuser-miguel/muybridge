@@ -149,6 +149,45 @@ Not done yet; when it is, follow the house pipeline:
 
 ## 8. Backlog
 
+### Hardware-accelerated decoding (`-hwaccel`) — investigated 2026-07-29, deferred
+
+The bundled ffmpeg already has it, for free: the GNOME Sdk ships the
+libva/vdpau/vulkan headers, so configure autodetected **vdpau, cuda, vaapi,
+drm, vulkan**. (Host ffmpeg additionally has qsv, opencl and amf; none matter
+here — amf is an *encoder*, and this app only ever encodes PNG/JPEG on the CPU.)
+
+Measured inside the sandbox on the dev laptop (AMD Vega iGPU + RTX 3050 Ti),
+with `--device=dri` as the only permission — no extra finish-args needed:
+
+| method | result |
+| --- | --- |
+| `vaapi` | works — `radeonsi_drv_video.so`, VA-API 1.22.0, on the iGPU |
+| `cuda` | works — NVDEC on the NVIDIA card, `pix_fmt: cuda` |
+| `vulkan` | works |
+| `drm` | `Device creation failed: -14` — not a decode path, expected |
+
+Not wired into the UI, for three reasons that any future toggle must answer:
+
+1. **ffmpeg does not fall back.** A failed hwaccel init ends the run with zero
+   frames — the `drm` row above. A toggle therefore needs the runner to retry
+   in software, not just add a flag.
+2. **The win is narrower than it looks.** Frames still come back to system
+   memory for the `fps` filter and the PNG/JPEG encode, and that transfer eats
+   into the gain. Worth it for 4K H.264/HEVC/AV1 where decode dominates;
+   invisible on modest files, where the image encode is the bottleneck.
+3. **For sparse sampling the bigger lever is elsewhere** — `-skip_frame nokey`
+   (keyframes only) or seeking. ffmpeg still decodes every frame today and the
+   `fps` filter discards most of them.
+
+Next step if picked up: benchmark a 1080p and a 4K clip, software vs vaapi vs
+cuda, at both a dense (`fps=10`) and a sparse (`fps=0.5`) sample rate, before
+writing any UI.
+
+Side effect of trimming the muxers to `image2`: `-f null -` is unavailable in
+the bundle, so benchmarks must write real frames.
+
+### Other
+
 - Scene-change sampling (`-vf select='gt(scene,0.4)'`) as a mode next to fps
 - WebP output
 - Drag and drop a video onto the window
