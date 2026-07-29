@@ -129,7 +129,9 @@ reach the network even if the sandbox let it.
   2. **Scale** — an optional output size, `-vf fps=…,scale=…`
   3. **"Every N seconds"** as an alternative to frames-per-second, since that
      is how the job is often actually described
-  4. **Batch** — a queue of videos sharing one set of settings
+  4. **More output formats** — AVIF, WebP, TIFF. Sized and measured already;
+     see §8 for the numbers, the per-format argv shapes and the test list
+  5. **Batch** — a queue of videos sharing one set of settings
 - **M3 — distribution.** AppStream screenshots, GitHub Pages landing page,
   first `.flatpak` bundle on GitHub Releases. Flathub is not the target, same
   decision as Foresight and Vitrine.
@@ -185,6 +187,64 @@ writing any UI.
 
 Side effect of trimming the muxers to `image2`: `-f null -` is unavailable in
 the bundle, so benchmarks must write real frames.
+
+### More output formats (M2.4) — measured 2026-07-29, to be built and tested
+
+PNG and JPEG are the only options today because the bundle is configured with
+`--disable-encoders --enable-encoder=png,mjpeg`. That is our restriction, not
+ffmpeg's.
+
+**Nothing new needs bundling.** Every library is already in
+`org.gnome.Platform//49` — verified, not assumed:
+
+```
+libwebp.so.7   libjxl.so.0.11   libaom.so.3   libSvtAv1Enc.so.3   libopenjp2   libtiff.so.6
+```
+
+so `--enable-libwebp --enable-libjxl --enable-libsvtav1 --enable-libaom` cost a
+rebuild and nothing else. A further tier is free outright — native encoders
+needing only a configure flag: `tiff`, `bmp`, `qoi`, `ppm`/`pgm`, `sgi`,
+`targa`, `dpx`, `exr`, `jpeg2000`, `jpegls`, `gif`, `apng`.
+
+Measured on a 1080p clip, 20 frames, host ffmpeg 8.1.1:
+
+| format | time | total size |
+| --- | --- | --- |
+| PNG (current default) | ~0s | 6200 KB |
+| JPEG `-q:v 3` (current) | ~0s | 1953 KB |
+| **AVIF** (libsvtav1) | 1s | **631 KB** |
+| WebP | 2s | 902 KB |
+| JPEG XL | 11s | 2263 KB |
+
+**The catch, and the reason this is an engine change rather than a longer
+list:** WebP and AVIF both default to writing *one animated file* instead of a
+sequence, and each needs a different argv shape to stop it:
+
+| format | what the argv needs |
+| --- | --- |
+| PNG, JPEG, TIFF, QOI, BMP | extension alone is enough |
+| AVIF | `-f image2 -c:v libsvtav1` — `-f image2` alone works, the codec pin keeps it off libaom's slow path |
+| WebP | `-c:v libwebp -f image2` — **`-f image2` alone is not enough**, it still wrote a single file |
+
+So `Job::build_argv` has to own per-format arguments, not just swap the
+extension, and `Format` grows from an enum of two into a small table
+(extension, codec pin, muxer pin, quality flag and range). That table is
+exactly what the argv tests should pin.
+
+**AVIF and JXL defaults are lossy**, so the size column above is not a
+like-for-like comparison with PNG. Both need a quality control the way JPEG has
+one, and **PNG stays the lossless default**.
+
+Recommended set when this is picked up: **AVIF + WebP + TIFF**. AVIF for the
+size win, WebP because it is cheap and widely useful, TIFF because it is free
+and archival. JXL deferred purely on speed — 11× slower than AVIF for a larger
+file — but the lib is there whenever that trade looks different.
+
+To test, per format: that a run writes N *separate* files and not one animated
+one; that the quality control actually moves the file size across its range;
+that the estimator and progress still agree with reality; and that the
+sandboxed build really has the encoder after the configure flags change
+(`flatpak run --command=ffmpeg … -encoders`).
 
 ### Other
 
