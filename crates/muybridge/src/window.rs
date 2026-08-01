@@ -14,7 +14,7 @@
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 
 use std::path::{Path, PathBuf};
 
@@ -29,10 +29,13 @@ const VIDEO_PATTERNS: &[&str] = &[
     "*.ts", "*.m2ts", "*.ogv", "*.3gp",
 ];
 
+/// Set on the settings box while a drag the window would accept is over it.
+const DROP_HIGHLIGHT: &str = "muybridge-drop";
+
 // Starting state, restored by "New Job". These must match the values the
 // Blueprint sets up, or a reset window would differ from a fresh one.
 const EMPTY_VIDEO_TITLE: &str = "No video chosen";
-const EMPTY_VIDEO_SUBTITLE: &str = "Click to pick the video to take frames from";
+const EMPTY_VIDEO_SUBTITLE: &str = "Click to pick a video, or drop one on the window";
 const EMPTY_DETAILS: &str = "—";
 const DEFAULT_START: &str = "00:00:00.000";
 const DEFAULT_FPS: f64 = 3.33;
@@ -165,6 +168,7 @@ impl MuybridgeWindow {
         self.update_output_row();
         self.sync_format_rows();
         self.setup_actions();
+        self.setup_drop_target();
 
         imp.video_row.connect_activated(glib::clone!(
             #[weak(rename_to = win)]
@@ -240,6 +244,145 @@ impl MuybridgeWindow {
             move |_, _| win.clear_job()
         ));
         self.add_action(&new_job);
+    }
+
+    // -------------------------------------------------------- drag and drop
+
+    /// Drop a video onto the window instead of picking it.
+    ///
+    /// One target, on the whole window content, because a drop aimed at a
+    /// 60-pixel row is a drop that misses. The rule has no overlap and needs no
+    /// explaining: a dropped **file** is the video, a dropped **folder** is
+    /// where the frames go.
+    ///
+    /// The entries have to be disarmed first — see [`strip_drop_targets`].
+    fn setup_drop_target(&self) {
+        let imp = self.imp();
+
+        // Every AdwEntryRow and AdwSpinRow wraps a GtkText, and GtkText ships
+        // its own drop target for strings. A file drag advertises text/plain
+        // alongside the file, so without this a drop landing a few pixels off
+        // the mark quietly types "file:///…" into Name instead of loading the
+        // video. These rows hold filenames and timecodes; they have no use for
+        // a dropped URI, and with the target gone the drag falls through to
+        // ours below.
+        for row in [
+            imp.start_row.upcast_ref::<gtk::Widget>(),
+            imp.end_row.upcast_ref(),
+            imp.stem_row.upcast_ref(),
+            imp.suffix_row.upcast_ref(),
+            imp.fps_row.upcast_ref(),
+            imp.digits_row.upcast_ref(),
+            imp.quality_row.upcast_ref(),
+        ] {
+            strip_drop_targets(row);
+        }
+
+        // A multi-file drag arrives as a FileList; some sources offer only a
+        // single GFile.
+        let drop = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY);
+        drop.set_types(&[gdk::FileList::static_type(), gio::File::static_type()]);
+
+        drop.connect_enter(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            #[upgrade_or]
+            gdk::DragAction::empty(),
+            move |_, _, _| {
+                // Nothing is droppable mid-run: the settings are frozen and the
+                // command is already out of the user's hands.
+                if win.imp().state.borrow().runner.is_some() {
+                    return gdk::DragAction::empty();
+                }
+                win.imp().settings_box.add_css_class(DROP_HIGHLIGHT);
+                gdk::DragAction::COPY
+            }
+        ));
+        drop.connect_leave(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |_| win.imp().settings_box.remove_css_class(DROP_HIGHLIGHT)
+        ));
+        drop.connect_drop(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            #[upgrade_or]
+            false,
+            move |_, value, _, _| {
+                win.imp().settings_box.remove_css_class(DROP_HIGHLIGHT);
+                if win.imp().state.borrow().runner.is_some() {
+                    return false;
+                }
+                win.accept_drop(&dropped_files(value))
+            }
+        ));
+
+        imp.toast_overlay.add_controller(drop);
+    }
+
+    /// Apply a drop: the first file becomes the video, the first folder becomes
+    /// the output folder. Returns whether anything was taken — GTK shows the
+    /// drop as rejected when it wasn't.
+    fn accept_drop(&self, files: &[gio::File]) -> bool {
+        let (mut video, mut folder) = (None, None);
+        let mut ignored = 0usize;
+
+        for file in files {
+            // A file with no local path is a remote or unexported one; ffmpeg
+            // needs a path on this filesystem.
+            let Some(path) = file.path() else {
+                ignored += 1;
+                continue;
+            };
+            let slot = if path.is_dir() { &mut folder } else { &mut video };
+            if slot.is_none() {
+                *slot = Some(path);
+            } else {
+                ignored += 1;
+            }
+        }
+
+        let took_folder = folder.is_some();
+        if let Some(path) = folder {
+            self.imp().state.borrow_mut().output_dir = Some(path);
+            self.update_output_row();
+        }
+
+        let had_video = video.is_some();
+        let took_video = match video {
+            // The path exists as a string but not as a file: in the sandbox
+            // that means the drag was never exported to us. Say so, rather than
+            // loading it and letting ffprobe deliver the bad news.
+            Some(path) if !path.is_file() => {
+                self.toast("That file isn't reachable — use the picker instead");
+                false
+            }
+            Some(path) => {
+                self.set_video(path);
+                true
+            }
+            None => false,
+        };
+
+        let took_something = took_video || took_folder;
+        if !took_something {
+            // An unreachable file has already said why; only speak up if
+            // nothing else did.
+            if !had_video {
+                self.toast("Nothing in that drop to use");
+            }
+        } else if ignored > 0 {
+            self.toast("One video at a time — took the first");
+        } else if took_folder && !took_video {
+            self.toast("Output folder set");
+        }
+
+        // A folder-only drop leaves the preview stale; a video drop refreshes
+        // it through `set_video`.
+        if took_folder && !took_video {
+            self.update_preview();
+        }
+        took_something
     }
 
     /// Reset the form for a fresh job. Ignored while a run is live, so it can
@@ -687,6 +830,43 @@ impl MuybridgeWindow {
 
     fn toast(&self, message: &str) {
         self.imp().toast_overlay.add_toast(adw::Toast::new(message));
+    }
+}
+
+/// Pull the files out of a drop, whichever of the two shapes it arrived in.
+fn dropped_files(value: &glib::Value) -> Vec<gio::File> {
+    if let Ok(list) = value.get::<gdk::FileList>() {
+        return list.files();
+    }
+    if let Ok(file) = value.get::<gio::File>() {
+        return vec![file];
+    }
+    Vec::new()
+}
+
+/// Remove every drop target from a widget and its descendants.
+///
+/// GTK adds one to `GtkText` internally, so this is the only way to stop an
+/// entry from swallowing a file drag and pasting its URI. Removing it costs the
+/// ability to drop *text* into these rows, which is a trade worth making for
+/// fields that hold filenames and timecodes.
+fn strip_drop_targets(widget: &gtk::Widget) {
+    // Collect first: removing a controller mutates the list being iterated.
+    let doomed: Vec<gtk::EventController> = widget
+        .observe_controllers()
+        .iter::<glib::Object>()
+        .flatten()
+        .filter_map(|object| object.downcast::<gtk::EventController>().ok())
+        .filter(|c| c.is::<gtk::DropTarget>() || c.is::<gtk::DropTargetAsync>())
+        .collect();
+    for controller in doomed {
+        widget.remove_controller(&controller);
+    }
+
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        strip_drop_targets(&widget);
+        child = widget.next_sibling();
     }
 }
 

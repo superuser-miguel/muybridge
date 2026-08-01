@@ -53,8 +53,10 @@ fn register_resources() {
     gio::resources_register(&resource);
 }
 
-/// A chunkier progress bar with a bigger readout: during a long extraction it
-/// is the only thing on screen worth looking at.
+/// Two rules: a chunkier progress bar with a bigger readout, because during a
+/// long extraction it is the only thing on screen worth looking at; and the
+/// outline that says a dragged file will be taken. `outline` rather than
+/// `border` so the highlight cannot shift the form while it appears.
 fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
@@ -65,6 +67,11 @@ fn load_css() {
              font-size: 1.1em;
              font-weight: bold;
              margin-bottom: 4px;
+         }
+         .muybridge-drop {
+             outline: 2px dashed @accent_color;
+             outline-offset: 4px;
+             border-radius: 12px;
          }",
     );
     if let Some(display) = gtk::gdk::Display::default() {

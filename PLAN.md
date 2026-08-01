@@ -96,6 +96,20 @@ While a run is on, the settings go insensitive, a progress bar and a status
 line appear at the bottom, and Extract is replaced by Cancel. Cancel sends
 SIGTERM: ffmpeg finishes the frame it is on and the ones already written stay.
 
+**Drag and drop.** One target covering the whole window content, not the rows:
+a drop aimed at a 60-pixel row is a drop that misses. The rule has no overlap —
+a dropped **file** is the video, a dropped **folder** is where the frames go —
+and drops are refused outright while a run is on.
+
+The part that is not obvious: every `AdwEntryRow` and `AdwSpinRow` wraps a
+`GtkText`, and `GtkText` carries its own drop target for strings. A file drag
+advertises `text/plain` next to the file, so the entries win the drop and paste
+`file:///…` into Name — which is what "drag and drop is finicky" actually means
+in a form like this one. `strip_drop_targets` removes those targets from the
+seven text-bearing rows so the drag falls through to ours. The cost is that
+*text* can no longer be dropped into them, which is no loss for fields holding
+filenames and timecodes.
+
 ## 5. Sandbox and portals
 
 Portals-first, as with the author's other apps. `finish-args` grants the
@@ -123,6 +137,7 @@ reach the network even if the sandbox let it.
 - **M1 — extraction. DONE (2026-07-29).** Command contract with tests, portal
   pickers, ffprobe details, trim range, frame estimate, live progress, cancel,
   result banner with Open Folder, PNG/JPEG. 30 tests, clippy clean.
+  Since: New Job (2026-07-31), drag and drop (2026-08-01).
 - **M2 — next.** In rough order:
   1. Excludes-style **backlog polish**: remember the output folder between
      runs, and re-request it through the portal on the next launch
@@ -249,8 +264,6 @@ sandboxed build really has the encoder after the configure flags change
 ### Other
 
 - Scene-change sampling (`-vf select='gt(scene,0.4)'`) as a mode next to fps
-- WebP output
-- Drag and drop a video onto the window
 - Start-of-range preview thumbnail, so a trim can be aimed
 - Contact-sheet output (`-vf tile=`)
 - Remember the last used settings (a KeyFile under `<config>/muybridge/`,
