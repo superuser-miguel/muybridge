@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Muybridge — pull still frames out of video</title>
+<meta name="description" content="A GNOME-native GTK4 front-end for ffmpeg: sample any video into a numbered sequence of stills, with a filmstrip you trim by eye, a frame estimate before anything runs, and a bundled, sandboxed engine.">
+<style>
+  :root {
+    --bg: #f5f7fb; --surface: #ffffff; --text: #171a1f; --muted: #596273;
+    --border: #e2e7f0; --accent: #3584e4; --accent-2: #1a5fb4;
+    --ok: #2e9e5b; --no: #c4ccd8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d; --surface: #1d222b; --text: #e9edf3; --muted: #a3adbe;
+      --border: #2a303b; --accent: #62a0ea; --accent-2: #3584e4;
+      --ok: #57d98a; --no: #414a58;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+  section { padding: 56px 0; }
+
+  /* Hero */
+  .hero { text-align: center; padding: 72px 0 48px; }
+  .icon {
+    width: 88px; height: 88px; border-radius: 22px; display: block; margin: 0 auto 20px;
+    box-shadow: 0 10px 30px rgba(26,95,180,.35);
+  }
+  h1 { font-size: 2.6rem; margin: 0 0 6px; letter-spacing: -.02em; }
+  .tagline { font-size: 1.25rem; color: var(--text); font-weight: 600; margin: 0 auto 14px; max-width: 34ch; }
+  .lede { color: var(--muted); max-width: 58ch; margin: 0 auto 26px; }
+  .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 11px 20px; border-radius: 11px; text-decoration: none;
+    font-weight: 600; border: 1px solid var(--border);
+  }
+  .btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .badge {
+    display: inline-block; margin-bottom: 18px; padding: 4px 12px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent); font-size: .82rem; font-weight: 600;
+  }
+  .note { color: var(--muted); font-size: .88rem; margin: 18px auto 0; max-width: 62ch; }
+
+  h2 { font-size: 1.6rem; letter-spacing: -.01em; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 26px; }
+
+  /* Comparison table */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; }
+  table { width: 100%; border-collapse: collapse; min-width: 560px; background: var(--surface); }
+  th, td { padding: 13px 14px; text-align: center; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; font-weight: 600; }
+  thead th { font-size: .8rem; color: var(--muted); font-weight: 600; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tr.me { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  tr.me td:first-child { color: var(--accent); }
+  .y { color: var(--ok); font-weight: 700; }
+  .n { color: var(--no); }
+
+  /* Features */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .95rem; }
+
+  /* Roadmap */
+  .road { list-style: none; padding: 0; margin: 0; color: var(--muted); }
+  .road li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .road li:last-child { border: 0; }
+  .road b { color: var(--text); }
+  .road .done b::before { content: "✓ "; color: var(--ok); }
+
+  footer { border-top: 1px solid var(--border); color: var(--muted); font-size: .9rem; }
+  footer p { margin: 6px 0; }
+  code { background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 1px 6px; border-radius: 6px; }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; overflow-x: auto; font-size: .88rem; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+
+  /* screenshot gallery + pure-CSS lightbox */
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+  .shot { display: block; border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+    background: var(--surface); color: var(--muted); text-decoration: none;
+    transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+  .shot:hover { transform: translateY(-3px); border-color: var(--accent);
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .shot img { display: block; width: 100%; height: 200px; object-fit: cover; object-position: top center;
+    background: #14171d; border-bottom: 1px solid var(--border); }
+  .shot .cap { display: block; padding: 11px 13px; font-size: .86rem; line-height: 1.4; }
+  .lb { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.82); }
+  .lb:target { display: block; }
+  .lb-inner { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+    padding: 4vh 4vw; box-sizing: border-box; cursor: zoom-out; }
+  .lb img { max-width: 100%; max-height: 92vh; border-radius: 10px; box-shadow: 0 12px 44px rgba(0,0,0,.55); }
+</style>
+</head>
+<body>
+
+<header class="hero wrap">
+  <img class="icon" src="icon.svg" alt="Muybridge icon">
+  <span class="badge">v0.1.0 — out now</span>
+  <h1>Muybridge</h1>
+  <p class="tagline">Take still frames out of video, at whatever rate you ask for.</p>
+  <p class="lede">
+    Point it at a file, say how often to sample, and it writes a numbered sequence of
+    frames into the folder you choose. Long videos are trimmed by eye on a filmstrip —
+    not by typing timecodes at them.
+  </p>
+  <div class="btns">
+    <a class="btn primary" href="https://superuser-miguel.github.io/muybridge-repo/muybridge.flatpakref">Install (auto-updating)</a>
+    <a class="btn" href="https://github.com/superuser-miguel/muybridge">View on GitHub</a>
+  </div>
+  <p class="sub" style="margin-top:12px">Signed Flatpak repo — new releases arrive with <code>flatpak update</code>. Prefer a one-off file? <a href="https://github.com/superuser-miguel/muybridge/releases/latest">Download the .flatpak bundle</a>.</p>
+  <p class="note">Linux · Flatpak · portals only — no host filesystem access · ffmpeg bundled &amp; version-pinned · no network, at all · no telemetry</p>
+</header>
+
+<section class="wrap" id="screens">
+  <h2>See it</h2>
+  <p class="sub">A GNOME-native window, driven entirely by the bundled ffmpeg. Click any shot to enlarge.</p>
+  <div class="gallery">
+    <a class="shot" href="#s1"><img src="screenshots/01-preview.png" alt="Muybridge with a video loaded, showing the filmstrip" loading="lazy"><span class="cap">Pick the range by eye — a filmstrip of the whole video, with the frame under the handle above it.</span></a>
+    <a class="shot" href="#s2"><img src="screenshots/02-trim.png" alt="A trimmed range on the filmstrip" loading="lazy"><span class="cap">Drag the ends to trim. Everything outside the selection dims.</span></a>
+    <a class="shot" href="#s3"><img src="screenshots/03-frames.png" alt="Frames and Output settings" loading="lazy"><span class="cap">Rate, format and naming — with the first filename and frame count shown before anything runs.</span></a>
+    <a class="shot" href="#s4"><img src="screenshots/04-progress.png" alt="An extraction in progress" loading="lazy"><span class="cap">Live progress while ffmpeg works, and a cancel that keeps what it already wrote.</span></a>
+    <a class="shot" href="#s5"><img src="screenshots/05-done.png" alt="The result banner after a finished run" loading="lazy"><span class="cap">A finished run says how many frames it wrote, and where.</span></a>
+  </div>
+
+  <div class="lb" id="s1"><a class="lb-inner" href="#screens"><img src="screenshots/01-preview.png" alt="Filmstrip and preview, enlarged"></a></div>
+  <div class="lb" id="s2"><a class="lb-inner" href="#screens"><img src="screenshots/02-trim.png" alt="Trimmed range, enlarged"></a></div>
+  <div class="lb" id="s3"><a class="lb-inner" href="#screens"><img src="screenshots/03-frames.png" alt="Frames and Output settings, enlarged"></a></div>
+  <div class="lb" id="s4"><a class="lb-inner" href="#screens"><img src="screenshots/04-progress.png" alt="Extraction in progress, enlarged"></a></div>
+  <div class="lb" id="s5"><a class="lb-inner" href="#screens"><img src="screenshots/05-done.png" alt="Result banner, enlarged"></a></div>
+</section>
+
+<section class="wrap">
+  <h2>Why Muybridge?</h2>
+  <p class="sub">Because the ffmpeg command that does this is easy to write and easy to get wrong — a mistyped timecode, a <code>%</code> in a filename, a range that runs backwards, an overwrite prompt nobody sees.</p>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th>Trim visually</th>
+          <th>Frame count before it runs</th>
+          <th>Live progress</th>
+          <th>No host filesystem access</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>ffmpeg</code> CLI</td><td class="n">✗</td><td class="n">✗</td><td class="n">~</td><td class="n">n/a</td></tr>
+        <tr><td>VLC scene filter</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
+        <tr><td>A video editor's frame export</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td><td class="n">✗</td></tr>
+        <tr class="me"><td>Muybridge</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Features</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>A filmstrip, not a timecode box</h3>
+      <p>Twelve thumbnails across the video with draggable start and end handles, and a larger preview of the frame under whichever one you moved last.</p>
+    </div>
+    <div class="card">
+      <h3>The preview is the output</h3>
+      <p>Frames are previewed by the same bundled ffmpeg that writes them, seeking the same way. What you picked is what you get.</p>
+    </div>
+    <div class="card">
+      <h3>Arrow keys that mean something</h3>
+      <p>Put the cursor on the minutes and press Up. Page Up steps by ten. Precise enough for a two-hour video without typing a single timecode.</p>
+    </div>
+    <div class="card">
+      <h3>Know the job before it runs</h3>
+      <p>The first filename and a frame estimate update live as you change the settings — so a job that would write 40,000 files says so first.</p>
+    </div>
+    <div class="card">
+      <h3>Drop it, or open it</h3>
+      <p>Drag a video onto the window, or open one straight from Files. A dropped folder becomes the output folder.</p>
+    </div>
+    <div class="card">
+      <h3>Sandboxed by default</h3>
+      <p>No host filesystem access and no network — not even for ffmpeg, which is built with networking disabled. Files arrive through the desktop portals.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Nothing hidden</h2>
+  <p class="sub">The app builds exactly one kind of command line, and its tests assert it argument for argument. This is it:</p>
+<pre><code>ffmpeg -hide_banner -nostdin -y \
+       -ss 00:17:11.448 -to 00:38:54.374 \
+       -i INPUT.mp4 \
+       -vf fps=3.33 \
+       -progress pipe:1 -nostats \
+       OUTDIR/NAME_%04d.png</code></pre>
+  <p class="note" style="max-width:none">
+    <code>-ss</code> and <code>-to</code> sit before <code>-i</code> so ffmpeg seeks the input
+    instead of decoding and discarding everything up to the start. Overwrite is always stated
+    explicitly, because the interactive prompt would hang a GUI forever. Commands are spawned as
+    an argument vector, never as a shell string — a filename with a space or a <code>$</code> in
+    it is just a filename.
+  </p>
+</section>
+
+<section class="wrap">
+  <h2>Roadmap</h2>
+  <ul class="road">
+    <li class="done"><b>Extraction</b> — trim range, PNG/JPEG, frame estimate, live progress, cancel</li>
+    <li class="done"><b>Pick the range by eye</b> — filmstrip, scrub preview, arrow-key timecode stepping</li>
+    <li><b>More output formats</b> — AVIF, WebP and TIFF. AVIF is roughly a tenth of PNG's size for a few minutes of CPU on a long job</li>
+    <li><b>Scale</b> — an optional output size, so frames come out ready to use</li>
+    <li><b>“Every N seconds”</b> — an alternative to frames-per-second, since that is often how the job is actually described</li>
+    <li><b>Batch</b> — a queue of videos sharing one set of settings</li>
+  </ul>
+  <p class="note" style="max-width:none">
+    Muybridge extracts frames and will not grow into a video editor — anything that writes
+    <em>video</em> belongs to a different tool.
+  </p>
+</section>
+
+<footer class="wrap" style="padding:28px 20px 48px">
+  <p>Muybridge is free software under the <a href="https://github.com/superuser-miguel/muybridge/blob/main/LICENSE">GPL-3.0-or-later</a>.</p>
+  <p>Named for <a href="https://en.wikipedia.org/wiki/Eadweard_Muybridge">Eadweard Muybridge</a>, who settled a bet about a galloping horse by taking the frames one at a time.</p>
+  <p>Built with GTK4, libadwaita and Rust. Engine: a bundled, version-pinned ffmpeg.</p>
+</footer>
+
+</body>
+</html>

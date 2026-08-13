@@ -14,13 +14,22 @@
       file, say how often to sample, and it writes a numbered sequence of PNG or
       JPEG frames into the folder you choose.
     </p>
+    <p>
+      Long videos are trimmed by eye rather than by typing timecodes. A
+      filmstrip runs the length of the video with draggable start and end
+      handles over it, and a larger preview above shows the exact frame under
+      whichever handle you last moved — the same frame the extraction will
+      write, decoded by the same ffmpeg that writes it.
+    </p>
     <p>Along the way it can:</p>
     <ul>
-      <li>Trim to a range, so only the part you care about is sampled</li>
+      <li>Trim to a range by dragging on the filmstrip, or by typing exact timecodes</li>
+      <li>Step a timecode with the arrow keys, one component at a time</li>
       <li>Show the video's size, codec, frame rate and length before you start</li>
       <li>Estimate how many frames a job will write, before it writes any</li>
       <li>Report live progress, and stop cleanly when you cancel</li>
       <li>Name the sequence, choose the counter width, and add a suffix</li>
+      <li>Take a video dropped on the window, or opened from your file manager</li>
     </ul>
     <p>
       ffmpeg does the work and is bundled with the app, so there is nothing to
@@ -41,15 +50,48 @@
 
   <content_rating type="oars-1.1"/>
 
+  <!-- Filenames are fixed by docs/screenshots/README.md; the images are served
+       from GitHub Pages, not shipped in the bundle. -->
+  <screenshots>
+    <screenshot type="default">
+      <image>https://superuser-miguel.github.io/muybridge/screenshots/01-preview.png</image>
+      <caption>Pick the range by eye: a filmstrip of the whole video, with the frame under the handle above it</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://superuser-miguel.github.io/muybridge/screenshots/02-trim.png</image>
+      <caption>Drag the ends to trim; everything outside the selection dims</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://superuser-miguel.github.io/muybridge/screenshots/03-frames.png</image>
+      <caption>Choose the sampling rate and format, and see the first filename and frame count before anything runs</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://superuser-miguel.github.io/muybridge/screenshots/04-progress.png</image>
+      <caption>Live progress while ffmpeg works, and a cancel that keeps what it already wrote</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://superuser-miguel.github.io/muybridge/screenshots/05-done.png</image>
+      <caption>A finished run says how many frames it wrote, and where</caption>
+    </screenshot>
+  </screenshots>
+
   <branding>
     <color type="primary" scheme_preference="light">#c0bfbc</color>
     <color type="primary" scheme_preference="dark">#241f31</color>
   </branding>
 
   <releases>
-    <release version="0.1.0" date="2026-07-29">
+    <release version="0.1.0" date="2026-08-13">
       <description>
         <p>First release.</p>
+        <ul>
+          <li>Sample a video into a numbered sequence of PNG or JPEG frames</li>
+          <li>Trim by dragging on a filmstrip, with a live preview of the frame under the handle</li>
+          <li>Step timecodes with the arrow keys, one component at a time</li>
+          <li>Drop a video on the window, or open one from your file manager</li>
+          <li>Live progress, a cancel that keeps what it wrote, and a frame estimate before it starts</li>
+          <li>ffmpeg is bundled; files are reached only through the desktop portals</li>
+        </ul>
       </description>
     </release>
   </releases>
