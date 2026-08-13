@@ -124,5 +124,5 @@ modules:
       - type: git
         url: https://github.com/superuser-miguel/muybridge.git
         tag: v0.1.0
-        commit: PLACEHOLDER_FILLED_IN_AFTER_TAGGING
+        commit: f7b26f94ff31bbd9d0b37a29345f5d8cbe7d55cf
       - cargo-sources.json
