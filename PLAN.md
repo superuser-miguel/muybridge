@@ -230,10 +230,6 @@ reach the network even if the sandbox let it.
   4. **More output formats** — AVIF, WebP, TIFF. Sized and measured already;
      see §8 for the numbers, the per-format argv shapes and the test list
   5. **Batch** — a queue of videos sharing one set of settings
-  6. **Trim and export the video itself** (`-c copy`) — *proposed, not agreed*.
-     The range controls already describe a cut; this would write it out as
-     video instead of as frames. Measured and specced in §8, including the
-     scope question it raises against §1
 - **M3 — distribution.** AppStream screenshots, GitHub Pages landing page,
   first `.flatpak` bundle on GitHub Releases. Flathub is not the target, same
   decision as Foresight and Vitrine.
@@ -348,13 +344,23 @@ that the estimator and progress still agree with reality; and that the
 sandboxed build really has the encoder after the configure flags change
 (`flatpak run --command=ffmpeg … -encoders`).
 
-### Trim and export the video (M2.6) — measured 2026-08-13, to be discussed
+### Trim and export the video — CLOSED 2026-08-13, not building it here
+
+**Decision: Muybridge does not go the video route. Montage absorbs it.** This
+app extracts frames; the moment it writes video it is a different tool, and that
+tool already exists in concept as `~/my-progs/montage`, whose v0.1 wedge is
+precisely a lossless cutter. The relationship is natural rather than a
+duplication to resolve — Muybridge is where the range-picking UI got proven, and
+that is what passes forward.
+
+Kept below because the measurements are the hand-off, not because the feature is
+pending. **The two numbers Montage should not have to re-derive are the keyframe
+drift and the muxer gap.**
 
 Once a range can be picked by eye on a filmstrip, the app is most of a snippet
 tool already. `ffmpeg -ss START -to END -i IN -c copy OUT.mp4` remuxes without
-re-encoding: near-instant, no quality loss, no encoder needed.
-
-**Three things have to be settled before this is worth building.**
+re-encoding: near-instant, no quality loss, no encoder needed. What made it the
+wrong feature *here*:
 
 **1. It cannot cut where you asked.** Stream copy can only start on a keyframe,
 because everything after one is decoded relative to it. Measured on a 1080p
@@ -385,20 +391,22 @@ an mp4. Enabling `mp4,mov,matroska,webm` is cheap — copy needs no *encoders*,
 which is the expensive tier — but it must be verified in the sandbox, not
 assumed, exactly as §8's format work requires.
 
-**3. It argues with §1, and another project already claims it.** "Not a video
-editor, not a transcoder." A stream copy is neither — it is a remux, and it
-writes what was already there. But the row after it is always "can I re-encode
-smaller", and that is the line.
+**3. It argues with §1, and Montage owns it.** "Not a video editor, not a
+transcoder." A stream copy is neither — it is a remux, and it writes what was
+already there. But the row after it is always "can I re-encode smaller", and
+that is the line.
 
-More to the point, **Montage** (`~/my-progs/montage`, concept-stage, drafted
-2026-08-12) is scoped as a GNOME-native video editor that *starts life as a
-lossless cutter* — this exact feature, with an engine built for it. The
-counter-argument is that the filmstrip and range controls already exist *here*
-while Montage has no code yet.
+**Montage** (`~/my-progs/montage`) is scoped as a GNOME-native editor whose v0.1
+is a cutter, with two export paths behind one button: stream copy when the cuts
+land on keyframes, GES re-encode otherwise. Its plan already carries the right
+design — *cut only on the ffprobe keyframe map*, with green keyframe ticks drawn
+on the timeline so the export verdict is never a surprise. The measurement above
+is empirical confirmation of that choice, not a new finding for it.
 
-**So the question to settle first is not how to build it, but where it lives.**
-If the answer is Montage, the keyframe measurement above is an input to that
-project rather than this one.
+**What actually passes forward is the UI**, not the ffmpeg line: this app's
+filmstrip is a working, tested precursor to that timeline — custom `snapshot()`
+widget, inset track, draggable in/out handles, dimming outside the selection,
+tested hit-test geometry. See §4 and `crates/muybridge/src/filmstrip.rs`.
 
 ### Other
 
