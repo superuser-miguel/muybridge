@@ -23,3 +23,7 @@ Cargo.lock.orig
 *.swp
 *~
 .DS_Store
+
+# Screenshots dropped in while diagnosing something on screen. Useful in the
+# moment, not part of the source — AppStream screenshots live in data/.
+/Troubleshooting

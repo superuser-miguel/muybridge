@@ -5,6 +5,7 @@
 //! `adw::Application`, and present the composite-template window. The command
 //! contract lives in the `ffmpeg-frames` crate, the UI in `window.rs`.
 
+mod filmstrip;
 mod runner;
 mod window;
 
@@ -23,6 +24,9 @@ fn main() -> glib::ExitCode {
 
     let app = adw::Application::builder()
         .application_id(config::APP_ID)
+        // So `muybridge some-clip.mp4` — and a file manager's Open With — start
+        // on a video instead of on the picker.
+        .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
 
     app.connect_startup(|app| {
@@ -30,15 +34,28 @@ fn main() -> glib::ExitCode {
         load_css();
     });
     app.connect_activate(|app| {
-        let window = MuybridgeWindow::new(app);
-        if config::PROFILE == "development" {
-            // libadwaita renders the striped "devel" header for unreleased builds.
-            window.add_css_class("devel");
+        present_window(app);
+    });
+    app.connect_open(|app, files, _| {
+        let window = present_window(app);
+        // One window, one job: anything past the first file is not something
+        // this app has a way to show.
+        if let Some(path) = files.first().and_then(|file| file.path()) {
+            window.open_video(path);
         }
-        window.present();
     });
 
     app.run()
+}
+
+fn present_window(app: &adw::Application) -> MuybridgeWindow {
+    let window = MuybridgeWindow::new(app);
+    if config::PROFILE == "development" {
+        // libadwaita renders the striped "devel" header for unreleased builds.
+        window.add_css_class("devel");
+    }
+    window.present();
+    window
 }
 
 /// Load `muybridge.gresource`. In an installed build it lives in `PKGDATADIR`;
@@ -53,10 +70,12 @@ fn register_resources() {
     gio::resources_register(&resource);
 }
 
-/// Two rules: a chunkier progress bar with a bigger readout, because during a
-/// long extraction it is the only thing on screen worth looking at; and the
-/// outline that says a dragged file will be taken. `outline` rather than
-/// `border` so the highlight cannot shift the form while it appears.
+/// Three rules: a chunkier progress bar with a bigger readout, because during a
+/// long extraction it is the only thing on screen worth looking at; the outline
+/// that says a dragged file will be taken, using `outline` rather than `border`
+/// so the highlight cannot shift the form while it appears; and a black bed for
+/// the scrub preview, which is what an image of unknown aspect ratio should be
+/// letterboxed against in either light or dark.
 fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
@@ -71,6 +90,10 @@ fn load_css() {
          .muybridge-drop {
              outline: 2px dashed @accent_color;
              outline-offset: 4px;
+             border-radius: 12px;
+         }
+         .muybridge-frame {
+             background-color: black;
              border-radius: 12px;
          }",
     );

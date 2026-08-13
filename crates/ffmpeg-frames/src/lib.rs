@@ -17,16 +17,24 @@
 //! is always stated explicitly as `-y` or `-n`, because the interactive
 //! "File exists. Overwrite?" prompt would hang the app forever.
 //!
+//! One other command exists, and only one: [`preview::thumbnail_argv`], which
+//! reads a single frame back on stdout so the range can be picked by eye
+//! instead of typed. It writes nothing and is built from the same `-ss`-before
+//! `-i` seek as the real job, so what the preview shows is what an extraction
+//! starting there would produce.
+//!
 //! Commands are spawned as an argv vector, never as a shell string, so a
 //! filename with a space, a quote or a `$` in it is just a filename.
 
+pub mod preview;
 pub mod probe;
 pub mod progress;
 pub mod timecode;
 
+pub use preview::{thumbnail_argv, tile_times, Scale};
 pub use probe::{parse_probe, probe_argv, Probe};
 pub use progress::{Event, Progress, StreamParser};
-pub use timecode::{Timecode, TimecodeError};
+pub use timecode::{field_at_cursor, step_at_cursor, Field, Timecode, TimecodeError};
 
 use std::ffi::OsString;
 use std::fmt;

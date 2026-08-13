@@ -8,6 +8,9 @@
 //! stderr is merged into stdout so one [`StreamParser`] sees ffmpeg's progress
 //! blocks *and* its error text, in order. The last few error lines are what a
 //! failed run reports back to the user.
+//!
+//! [`grab_frame`] is the exception and deliberately does the opposite: its
+//! stdout is a PNG, so merging anything into it would corrupt the image.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -188,6 +191,94 @@ where
             done(probe);
         }
     });
+}
+
+/// One in-flight frame grab. Dropping this does not stop it; [`cancel`] does.
+///
+/// [`cancel`]: FrameGrab::cancel
+#[derive(Debug)]
+pub struct FrameGrab {
+    proc: gio::Subprocess,
+    live: Rc<Cell<bool>>,
+}
+
+impl FrameGrab {
+    /// Abandon this grab: kill ffmpeg and guarantee the callback never fires.
+    ///
+    /// Dragging a filmstrip handle asks for frames faster than they can be
+    /// decoded, and a reply that arrives after the handle has moved on would
+    /// put the wrong frame on screen. SIGKILL rather than SIGTERM because
+    /// there is nothing half-written to finalise — the output is a pipe nobody
+    /// is going to read.
+    pub fn cancel(&self) {
+        self.live.set(false);
+        self.proc.force_exit();
+    }
+}
+
+/// Spawn ffmpeg and collect its **binary** stdout — one still image.
+///
+/// Unlike [`spawn_ffmpeg`] this must not merge stderr into stdout: a single
+/// line of ffmpeg chatter landing in the middle of a PNG is a corrupt image.
+/// stderr is silenced outright, because a preview that cannot be produced is
+/// not something to interrupt the user about — the frame simply stays as it
+/// was.
+///
+/// `on_done` gets `None` when ffmpeg failed or wrote nothing, which is the
+/// ordinary answer for a seek past the end of the video.
+pub fn grab_frame<D>(argv: Vec<OsString>, on_done: D) -> Result<FrameGrab, glib::Error>
+where
+    D: FnOnce(Option<glib::Bytes>) + 'static,
+{
+    let mut full: Vec<OsString> = Vec::with_capacity(argv.len() + 1);
+    full.push(OsString::from("ffmpeg"));
+    full.extend_from_slice(&argv);
+    let refs: Vec<&OsStr> = full.iter().map(OsString::as_os_str).collect();
+
+    let proc = gio::Subprocess::newv(
+        &refs,
+        gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE,
+    )?;
+    let stdout = proc.stdout_pipe().expect("STDOUT_PIPE requested");
+    let live = Rc::new(Cell::new(true));
+    let on_done = RefCell::new(Some(on_done));
+
+    glib::spawn_future_local(glib::clone!(
+        #[strong]
+        proc,
+        #[strong]
+        live,
+        async move {
+            let mut image: Vec<u8> = Vec::new();
+            loop {
+                match stdout
+                    .read_bytes_future(65_536, glib::Priority::DEFAULT)
+                    .await
+                {
+                    Ok(bytes) if bytes.is_empty() => break, // EOF
+                    Ok(bytes) => image.extend_from_slice(&bytes),
+                    Err(_) => break,
+                }
+                if !live.get() {
+                    return;
+                }
+            }
+            let _ = proc.wait_future().await;
+
+            // Cancelled while we were reading: the caller has moved on and is
+            // no longer expecting this frame.
+            if !live.get() {
+                return;
+            }
+
+            let ok = proc.has_exited() && proc.exit_status() == 0 && !image.is_empty();
+            if let Some(done) = on_done.borrow_mut().take() {
+                done(ok.then(|| glib::Bytes::from_owned(image)));
+            }
+        }
+    ));
+
+    Ok(FrameGrab { proc, live })
 }
 
 fn spawn(program: &str, argv: &[OsString]) -> Result<gio::Subprocess, glib::Error> {

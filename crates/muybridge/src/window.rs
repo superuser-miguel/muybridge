@@ -17,10 +17,13 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use ffmpeg_frames::preview::{self, Scale};
 use ffmpeg_frames::{format_number, Format, Job, JobError, Probe, Progress, Timecode};
 
-use crate::runner::{self, Outcome, Runner, Status};
+use crate::filmstrip::{FilmStrip, TILE_COUNT};
+use crate::runner::{self, FrameGrab, Outcome, Runner, Status};
 
 /// Suffix patterns offered alongside `video/*`; the portal picker matches on
 /// MIME type, a plain GTK picker on the glob.
@@ -42,6 +45,13 @@ const DEFAULT_FPS: f64 = 3.33;
 const DEFAULT_QUALITY: f64 = 3.0;
 const DEFAULT_DIGITS: f64 = 4.0;
 
+/// How long a scrub has to settle before ffmpeg is asked for the frame.
+///
+/// A drag emits motion far faster than a frame can be decoded (~200 ms), so
+/// without this every pixel of travel would spawn a process that is obsolete
+/// before it finishes. Short enough that letting go feels immediate.
+const SCRUB_SETTLE: Duration = Duration::from_millis(120);
+
 mod imp {
     use super::*;
     use std::cell::RefCell;
@@ -59,6 +69,17 @@ mod imp {
         pub run_estimate: Option<u64>,
         /// Where the last finished run wrote, for the banner's Open Folder.
         pub last_output_dir: Option<PathBuf>,
+
+        // -- scrub preview and filmstrip --------------------------------
+        /// Bumped whenever the strip is rebuilt. Thumbnails still in flight
+        /// from the previous video carry the old number and are dropped.
+        pub strip_run: u64,
+        /// The thumbnail currently being decoded, so it can be abandoned.
+        pub tile_grab: Option<FrameGrab>,
+        pub preview_grab: Option<FrameGrab>,
+        /// Where the scrub has got to, and the timer waiting for it to settle.
+        pub pending_scrub: Option<f64>,
+        pub scrub_timer: Option<glib::SourceId>,
     }
 
     #[derive(Debug, Default, gtk::CompositeTemplate)]
@@ -78,6 +99,16 @@ mod imp {
         pub video_row: TemplateChild<adw::ActionRow>,
         #[template_child]
         pub details_row: TemplateChild<adw::ActionRow>,
+        #[template_child]
+        pub preview_box: TemplateChild<gtk::Box>,
+        #[template_child]
+        pub frame_picture: TemplateChild<gtk::Picture>,
+        #[template_child]
+        pub film_strip: TemplateChild<FilmStrip>,
+        #[template_child]
+        pub scrub_label: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub range_label: TemplateChild<gtk::Label>,
         #[template_child]
         pub trim_row: TemplateChild<adw::SwitchRow>,
         #[template_child]
@@ -119,6 +150,9 @@ mod imp {
         type ParentType = adw::ApplicationWindow;
 
         fn class_init(klass: &mut Self::Class) {
+            // The Blueprint names $MuybridgeFilmStrip; GTK can only build a type
+            // it has already seen registered.
+            FilmStrip::ensure_type();
             klass.bind_template();
         }
 
@@ -153,6 +187,16 @@ impl MuybridgeWindow {
         glib::Object::builder().property("application", app).build()
     }
 
+    /// Load a video handed over on the command line or by a file manager.
+    /// Everything past this point is the same as having picked it.
+    pub fn open_video(&self, path: PathBuf) {
+        if path.is_file() {
+            self.set_video(path);
+        } else {
+            self.toast("That file isn't reachable — use the picker instead");
+        }
+    }
+
     fn setup(&self) {
         let imp = self.imp();
 
@@ -169,6 +213,8 @@ impl MuybridgeWindow {
         self.sync_format_rows();
         self.setup_actions();
         self.setup_drop_target();
+        self.setup_filmstrip();
+        self.setup_timecode_stepping();
 
         imp.video_row.connect_activated(glib::clone!(
             #[weak(rename_to = win)]
@@ -244,6 +290,269 @@ impl MuybridgeWindow {
             move |_, _| win.clear_job()
         ));
         self.add_action(&new_job);
+    }
+
+    // ----------------------------------------------------- timecode stepping
+
+    /// Arrow keys nudge the part of the timecode the cursor is on.
+    ///
+    /// Typing `01:47:23.500` into a two-hour video to move it thirty seconds is
+    /// not editing, it is transcription. With this, the cursor goes on the
+    /// minutes and Up is a minute — and the filmstrip follows, because these
+    /// rows are still what everything reads from.
+    ///
+    /// **Capture phase**, because the `GtkText` inside the row has its own key
+    /// handler and would see the arrows first — the same class of problem as
+    /// its built-in drop target in [`setup_drop_target`](Self::setup_drop_target).
+    fn setup_timecode_stepping(&self) {
+        for row in [self.imp().start_row.get(), self.imp().end_row.get()] {
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            keys.connect_key_pressed(glib::clone!(
+                #[weak(rename_to = win)]
+                self,
+                #[weak]
+                row,
+                #[upgrade_or]
+                glib::Propagation::Proceed,
+                move |_, key, _, _| win.step_timecode(&row, key)
+            ));
+            row.add_controller(keys);
+        }
+    }
+
+    fn step_timecode(&self, row: &adw::EntryRow, key: gdk::Key) -> glib::Propagation {
+        // Page Up/Down step by ten, matching the page-increment the spin rows
+        // in this same form already use.
+        let steps = match key {
+            gdk::Key::Up | gdk::Key::KP_Up => 1,
+            gdk::Key::Down | gdk::Key::KP_Down => -1,
+            gdk::Key::Page_Up | gdk::Key::KP_Page_Up => 10,
+            gdk::Key::Page_Down | gdk::Key::KP_Page_Down => -10,
+            _ => return glib::Propagation::Proceed,
+        };
+
+        let cursor = row.position().max(0) as usize;
+        // Text that doesn't parse has nothing to step: let the key through
+        // rather than swallowing it and appearing broken.
+        let Some((value, caret)) = ffmpeg_frames::step_at_cursor(&row.text(), cursor, steps) else {
+            return glib::Propagation::Proceed;
+        };
+
+        // Stepping past the end of the video is never what was meant. Zero is
+        // handled in the engine; the duration is the bound only the UI knows.
+        let seconds = match self.video_duration() {
+            Some(duration) => value.seconds().min(duration),
+            None => value.seconds(),
+        };
+
+        let text = Timecode::from_seconds(seconds).format();
+        row.set_text(&text);
+        row.set_position(caret.min(text.len()) as i32);
+        glib::Propagation::Stop
+    }
+
+    // ------------------------------------------------ scrub preview & strip
+
+    /// Wire the filmstrip to the timecode rows in both directions.
+    ///
+    /// The strip never becomes the source of truth. Dragging a handle writes
+    /// into Start and End exactly as typing would, and everything downstream —
+    /// validation, the frame estimate, the command itself — carries on reading
+    /// those rows. What comes back the other way is [`sync_strip_from_rows`],
+    /// called from `update_preview`, so a typed timecode moves the handle too.
+    ///
+    /// [`sync_strip_from_rows`]: Self::sync_strip_from_rows
+    fn setup_filmstrip(&self) {
+        let imp = self.imp();
+
+        imp.film_strip.connect_range_changed(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |start, end| win.apply_strip_range(start, end)
+        ));
+        imp.film_strip.connect_scrub(glib::clone!(
+            #[weak(rename_to = win)]
+            self,
+            move |seconds| win.scrub_to(seconds)
+        ));
+    }
+
+    /// A handle was dragged. Reaching for a handle *is* asking to trim, so the
+    /// switch follows rather than making the drag do nothing until it is found.
+    fn apply_strip_range(&self, start: f64, end: f64) {
+        let imp = self.imp();
+        if !imp.trim_row.is_active() {
+            imp.trim_row.set_active(true);
+        }
+        // These fire `changed`, which re-derives the preview and syncs the
+        // strip back — with the values it just sent, so it settles at once.
+        imp.start_row
+            .set_text(&Timecode::from_seconds(start).format());
+        imp.end_row.set_text(&Timecode::from_seconds(end).format());
+    }
+
+    /// Move the scrub position: the readout follows immediately, the frame
+    /// after the drag settles. Doing it the other way round would leave the
+    /// number lagging behind the handle by a decode.
+    fn scrub_to(&self, seconds: f64) {
+        let imp = self.imp();
+        imp.scrub_label
+            .set_label(&Timecode::from_seconds(seconds).format());
+
+        let mut state = imp.state.borrow_mut();
+        state.pending_scrub = Some(seconds);
+        if let Some(timer) = state.scrub_timer.take() {
+            timer.remove();
+        }
+        drop(state);
+
+        let win = self.downgrade();
+        let timer = glib::timeout_add_local_once(SCRUB_SETTLE, move || {
+            let Some(win) = win.upgrade() else { return };
+            // The source has fired and is gone; forget it before anything can
+            // try to remove it a second time.
+            win.imp().state.borrow_mut().scrub_timer = None;
+            win.grab_scrub_frame();
+        });
+        imp.state.borrow_mut().scrub_timer = Some(timer);
+    }
+
+    /// Ask ffmpeg for the frame the scrub settled on.
+    fn grab_scrub_frame(&self) {
+        let imp = self.imp();
+        let (video, at) = {
+            let state = imp.state.borrow();
+            (state.video.clone(), state.pending_scrub)
+        };
+        let (Some(video), Some(at)) = (video, at) else {
+            return;
+        };
+
+        // Whatever was being decoded is for a position the user has left.
+        let previous = imp.state.borrow_mut().preview_grab.take();
+        if let Some(grab) = previous {
+            grab.cancel();
+        }
+
+        let (width, height) = preview::PREVIEW_BOX;
+        let argv = ffmpeg_frames::thumbnail_argv(&video, at, Scale::Fit { width, height });
+
+        let win = self.downgrade();
+        let grab = runner::grab_frame(argv, move |bytes| {
+            let Some(win) = win.upgrade() else { return };
+            win.imp().state.borrow_mut().preview_grab = None;
+            // No frame is the ordinary answer past the end of the video: leave
+            // the last good one up rather than blanking the preview.
+            if let Some(texture) = bytes.and_then(|b| gdk::Texture::from_bytes(&b).ok()) {
+                win.imp().frame_picture.set_paintable(Some(&texture));
+            }
+        });
+        if let Ok(grab) = grab {
+            imp.state.borrow_mut().preview_grab = Some(grab);
+        }
+    }
+
+    /// Fill the strip for the current video, one thumbnail at a time.
+    ///
+    /// Sequential, not parallel: twelve ffmpegs at once would fight over the
+    /// same cores for no gain, and this way the tiles appear left to right,
+    /// which reads as progress rather than as a stall.
+    fn build_filmstrip(&self) {
+        let imp = self.imp();
+        let (video, duration) = (self.imp().state.borrow().video.clone(), self.video_duration());
+        let (Some(video), Some(duration)) = (video, duration) else {
+            return;
+        };
+
+        let run = {
+            let mut state = imp.state.borrow_mut();
+            state.strip_run += 1;
+            state.strip_run
+        };
+        imp.film_strip.reset(duration);
+        self.sync_strip_from_rows();
+        self.request_tile(video, ffmpeg_frames::tile_times(duration, TILE_COUNT), 0, run);
+    }
+
+    fn request_tile(&self, video: PathBuf, times: Vec<f64>, index: usize, run: u64) {
+        let imp = self.imp();
+        if imp.state.borrow().strip_run != run {
+            return; // a different video is being laid out now
+        }
+        let Some(&at) = times.get(index) else {
+            return; // the strip is full
+        };
+
+        let argv = ffmpeg_frames::thumbnail_argv(&video, at, Scale::Height(preview::TILE_HEIGHT));
+        let win = self.downgrade();
+        let grab = runner::grab_frame(argv, move |bytes| {
+            let Some(win) = win.upgrade() else { return };
+            if win.imp().state.borrow().strip_run != run {
+                return;
+            }
+            // A tile that will not decode just stays empty; the strip is a
+            // guide, not a promise.
+            if let Some(texture) = bytes.and_then(|b| gdk::Texture::from_bytes(&b).ok()) {
+                win.imp().film_strip.set_tile(index, texture);
+            }
+            win.request_tile(video, times, index + 1, run);
+        });
+        match grab {
+            Ok(grab) => imp.state.borrow_mut().tile_grab = Some(grab),
+            Err(_) => imp.state.borrow_mut().tile_grab = None,
+        }
+    }
+
+    /// Push the timecode rows onto the strip. Silent — the strip's setters do
+    /// not call back, which is what stops this from looping with
+    /// [`apply_strip_range`](Self::apply_strip_range).
+    fn sync_strip_from_rows(&self) {
+        let imp = self.imp();
+        let Some(duration) = self.video_duration() else {
+            return;
+        };
+        let (start, end) = if imp.trim_row.is_active() {
+            let row_time = |row| {
+                parse_row_time(row)
+                    .ok()
+                    .flatten()
+                    .map(Timecode::seconds)
+            };
+            (
+                row_time(&imp.start_row).unwrap_or(0.0),
+                row_time(&imp.end_row).unwrap_or(duration),
+            )
+        } else {
+            // Trimming off means the whole video, and the strip should say so.
+            (0.0, duration)
+        };
+        let (start, end) = (start.clamp(0.0, duration), end.clamp(0.0, duration));
+        imp.film_strip.set_range(start, end);
+
+        imp.range_label.set_label(&format!(
+            "{} of {}",
+            Timecode::from_seconds((end - start).max(0.0)).format_short(),
+            Timecode::from_seconds(duration).format_short(),
+        ));
+    }
+
+    /// Stop everything the preview has in flight. Called before a new video,
+    /// before an extraction, and on reset — a stale frame arriving afterwards
+    /// would contradict what is on screen.
+    fn cancel_previews(&self) {
+        let imp = self.imp();
+        let mut state = imp.state.borrow_mut();
+        state.strip_run += 1;
+        state.pending_scrub = None;
+        if let Some(timer) = state.scrub_timer.take() {
+            timer.remove();
+        }
+        let grabs = [state.tile_grab.take(), state.preview_grab.take()];
+        drop(state);
+        for grab in grabs.into_iter().flatten() {
+            grab.cancel();
+        }
     }
 
     // -------------------------------------------------------- drag and drop
@@ -410,6 +719,14 @@ impl MuybridgeWindow {
         imp.video_row.set_subtitle(EMPTY_VIDEO_SUBTITLE);
         imp.details_row.set_subtitle(EMPTY_DETAILS);
 
+        // The preview and the strip belong to the video that just went away.
+        self.cancel_previews();
+        imp.preview_box.set_visible(false);
+        imp.frame_picture.set_paintable(gdk::Paintable::NONE);
+        imp.film_strip.reset(0.0);
+        imp.scrub_label.set_label("");
+        imp.range_label.set_label("");
+
         // Range.
         imp.trim_row.set_active(false);
         imp.start_row.set_text(DEFAULT_START);
@@ -491,6 +808,10 @@ impl MuybridgeWindow {
     fn update_preview(&self) {
         let imp = self.imp();
         let running = imp.state.borrow().runner.is_some();
+
+        // The handles answer to the rows, so they are refreshed from the same
+        // place and at the same moment as everything else derived from them.
+        self.sync_strip_from_rows();
 
         match self.current_job() {
             Ok(job) => {
@@ -577,6 +898,14 @@ impl MuybridgeWindow {
         imp.details_row.set_subtitle("Reading…");
         imp.end_row.set_text("");
 
+        // Nothing can be laid out along a video of unknown length, so the strip
+        // waits for ffprobe rather than showing an empty one.
+        self.cancel_previews();
+        imp.preview_box.set_visible(false);
+        imp.frame_picture.set_paintable(gdk::Paintable::NONE);
+        imp.scrub_label.set_label("");
+        imp.range_label.set_label("");
+
         {
             let mut state = imp.state.borrow_mut();
             state.video = Some(path.clone());
@@ -614,6 +943,16 @@ impl MuybridgeWindow {
                 .set_subtitle("ffprobe could not read this file"),
         }
         self.update_preview();
+
+        // A duration is what makes a filmstrip possible; without one there is
+        // nothing to measure the tiles against.
+        if self.video_duration().is_some() {
+            imp.preview_box.set_visible(true);
+            self.build_filmstrip();
+            // Open on the first frame rather than on black, so the preview is
+            // showing the video before it is touched.
+            self.scrub_to(0.0);
+        }
     }
 
     fn choose_output_dir(&self) {
@@ -694,6 +1033,10 @@ impl MuybridgeWindow {
             self.toast(&format!("Cannot write to that folder: {error}"));
             return;
         }
+
+        // The extraction gets the cores to itself; a half-built filmstrip is
+        // not worth slowing it down for.
+        self.cancel_previews();
 
         let duration = self.video_duration();
         {

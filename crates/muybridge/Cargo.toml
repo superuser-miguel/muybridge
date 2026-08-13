@@ -12,5 +12,5 @@ path = "src/main.rs"
 [dependencies]
 # Imported as `gtk` / `adw` (idiomatic gtk-rs). gtk re-exports gio & glib.
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }  # FileDialog 4.10, CssProvider::load_from_string 4.12
-adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }  # SpinRow/SwitchRow 1.4, AboutDialog 1.5
+adw = { package = "libadwaita", version = "0.9", features = ["v1_6"] }  # SpinRow/SwitchRow 1.4, AboutDialog 1.5, accent_color_rgba 1.6
 ffmpeg-frames = { path = "../ffmpeg-frames" }

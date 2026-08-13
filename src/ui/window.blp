@@ -82,6 +82,40 @@ template $MuybridgeWindow: Adw.ApplicationWindow {
               }
             }
 
+            // Shown once ffprobe has reported a duration — without one there is
+            // nothing to lay a filmstrip along. See MuybridgeWindow::apply_probe.
+            Box preview_box {
+              visible: false;
+              orientation: vertical;
+              spacing: 8;
+
+              Picture frame_picture {
+                height-request: 220;
+                content-fit: contain;
+                styles ["muybridge-frame"]
+              }
+
+              $MuybridgeFilmStrip film_strip {
+                height-request: 64;
+                tooltip-text: _("Drag the ends to trim; click anywhere to look at that moment");
+              }
+
+              Box {
+                spacing: 12;
+
+                Label scrub_label {
+                  xalign: 0;
+                  hexpand: true;
+                  styles ["dim-label", "numeric"]
+                }
+
+                Label range_label {
+                  xalign: 1;
+                  styles ["dim-label", "numeric"]
+                }
+              }
+            }
+
             Adw.PreferencesGroup {
               title: _("Range");
               description: _("Off takes frames from the whole video");
@@ -94,11 +128,13 @@ template $MuybridgeWindow: Adw.ApplicationWindow {
                 title: _("Start");
                 text: "00:00:00.000";
                 visible: bind trim_row.active;
+                tooltip-text: _("Arrow keys step the part the cursor is on; Page Up and Page Down step by ten");
               }
 
               Adw.EntryRow end_row {
                 title: _("End");
                 visible: bind trim_row.active;
+                tooltip-text: _("Arrow keys step the part the cursor is on; Page Up and Page Down step by ten");
               }
             }
 

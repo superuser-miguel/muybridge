@@ -56,14 +56,29 @@ both produce the frame counts the estimator predicts, and `out_time` in a
 trimmed run is relative to the selected span — so the progress fraction is
 span-relative and correct.
 
+**One other command exists**, `preview::thumbnail_argv`, and only for reading a
+single frame back to look at:
+
+```text
+ffmpeg -hide_banner -nostdin -v error -ss AT -i INPUT
+       -frames:v 1 -an -vf scale=… -f image2pipe -c:v png -
+```
+
+It writes nothing to disk, and it uses the same `-ss`-before-`-i` seek as the
+real job so the frame on screen is the frame an extraction starting there would
+produce. A preview that disagreed with the output would be worse than none.
+`image2pipe` and `png` are already in the trimmed bundle — verified 2026-08-13
+with `flatpak run --command=ffmpeg` — so this cost nothing in the manifest.
+
 ## 3. Architecture
 
 ```
 crates/ffmpeg-frames    UI-free engine. Job -> argv, ffprobe argv + parser,
-                        -progress stream parser, timecodes, frame estimation.
-                        NEVER add gtk to this crate.
+                        -progress stream parser, timecodes, frame estimation,
+                        single-frame preview argv. NEVER add gtk to this crate.
 crates/muybridge        the app. window.rs (composite template + all signal
-                        handling), runner.rs (gio::Subprocess, async reads).
+                        handling), runner.rs (gio::Subprocess, async reads),
+                        filmstrip.rs (the one self-drawing widget).
 src/ui/window.blp       the entire layout. Rust builds no widget tree.
 data/                   desktop entry, AppStream metainfo, icon, gresource
 build-aux/              the Meson -> cargo bridge
@@ -77,15 +92,21 @@ stdout and stderr are **merged** into one pipe so a single parser sees progress
 blocks and error text in order; any line that isn't a known progress key is
 kept as a message, and the last one is what a failed run reports.
 
+The frame grab is the one exception and does the opposite: its stdout is a PNG,
+so stderr is silenced outright rather than merged — one line of ffmpeg chatter
+landing in the middle of the payload is a corrupt image.
+
 ## 4. The UI
 
 One scrolling page of preference groups, in the order a job is described:
 
 1. **Video** — the file, plus what ffprobe says about it
-2. **Range** — off means the whole video; on reveals start and end
-3. **Frames** — rate, format, and (for JPEG) quality
-4. **Output** — folder, name, suffix, counter digits, overwrite
-5. **Will write** — the first filename and the frame estimate, live
+2. **Preview** — a frame, a filmstrip and the selected span (only once ffprobe
+   has reported a duration; without one there is nothing to lay tiles along)
+3. **Range** — off means the whole video; on reveals start and end
+4. **Frames** — rate, format, and (for JPEG) quality
+5. **Output** — folder, name, suffix, counter digits, overwrite
+6. **Will write** — the first filename and the frame estimate, live
 
 Every control feeds `current_job()`, which returns either a validated `Job` or
 the one sentence explaining why it isn't ready. That sentence goes in the
@@ -95,6 +116,67 @@ from the widgets to the command.
 While a run is on, the settings go insensitive, a progress bar and a status
 line appear at the bottom, and Extract is replaced by Cancel. Cancel sends
 SIGTERM: ffmpeg finishes the frame it is on and the ones already written stay.
+
+**Preview and filmstrip.** A long video cannot be trimmed by typing timecodes
+at it — you have to see where you are. Twelve thumbnails span the duration with
+draggable in and out handles over them, and a larger frame above shows whatever
+the last drag touched.
+
+Decisions worth keeping:
+
+- **ffmpeg, not GStreamer.** `gtk4paintablesink` is in the runtime (checked, it
+  is what Showtime renders through) so the playback route would have bundled
+  nothing either. It lost on three counts: it would preview through a *different
+  decoder* than the one doing the work, it puts a media pipeline inside the UI
+  process against the architecture in §3, and the feature is scrubbing, not
+  playing. If real playback is ever wanted, that door is still open.
+- **The strip owns nothing.** Dragging a handle writes into the Start and End
+  rows exactly as typing would, and those rows remain what the job is built
+  from. `sync_strip_from_rows` pushes the other way from `update_preview`, so a
+  typed timecode moves the handle. The strip's setters are silent and only
+  gestures call back, which is what stops the round trip looping.
+- **Grabbing a handle turns trimming on.** Reaching for one *is* asking to trim;
+  making the drag inert until a switch is found would be a puzzle.
+- **Seeks are debounced by 120 ms and cancelled, not queued.** A drag emits
+  motion far faster than a frame decodes (~200 ms), so every pixel of travel
+  would otherwise spawn a process obsolete before it finished. The readout
+  follows the handle immediately; only the picture waits.
+- **Tiles fill sequentially**, left to right. Twelve ffmpegs at once would fight
+  over the same cores for no gain, and in order it reads as progress.
+- A generation counter (`strip_run`) means thumbnails still in flight when the
+  video changes are dropped rather than painted over the new one.
+
+Measured 2026-08-13 on a 1080p h264 file: ~200 ms per frame regardless of seek
+depth — `-ss` before `-i` goes through the container index, so eighteen minutes
+in costs what three seconds in costs.
+
+**Arrow keys in Start and End.** Up and Down step whichever component of the
+timecode the cursor is on — hours, minutes, seconds or milliseconds — and Page
+Up/Down step by ten, matching the page-increment the spin rows already use.
+Typing `01:47:23.500` at a two-hour video to move it thirty seconds is
+transcription, not editing.
+
+`step_at_cursor` in the engine does the work and is tested there. Two details it
+exists to get right: the component is read **from the right**, because the last
+one is always seconds whatever form was typed (`00:17:11.448`, `17:11`, `11`);
+and it hands back a cursor position along with the value, so holding an arrow
+down keeps stepping the same component instead of wandering as the text is
+rewritten under it. The controller sits on the row in the **capture** phase —
+`GtkText` would otherwise take the arrows first, the same class of problem as
+its built-in drop target below.
+
+**Opening a video from outside.** The app takes `ApplicationFlags::HANDLES_OPEN`
+and the desktop entry declares `Exec=muybridge %U` plus a `MimeType=video/…`
+list, which is all Vitrine does and all that is needed: `flatpak build-export`
+sees the `%U` and rewrites the exported `Exec` to add `--file-forwarding` and
+the `@@u %U @@` markers by itself. Files' *Open With* then hands the video over
+through the document portal — verified 2026-08-13 against a file in `~/Videos`,
+which the sandbox cannot otherwise see.
+
+The one case that does *not* work is a bare `flatpak run … ~/clip.mp4` from a
+terminal, which bypasses the desktop entry and hands over a path the sandbox
+cannot read. That toasts "isn't reachable", which is correct; the working
+incantation is `flatpak run --file-forwarding … @@u FILE @@`.
 
 **Drag and drop.** One target covering the whole window content, not the rows:
 a drop aimed at a 60-pixel row is a drop that misses. The rule has no overlap —
@@ -137,7 +219,8 @@ reach the network even if the sandbox let it.
 - **M1 — extraction. DONE (2026-07-29).** Command contract with tests, portal
   pickers, ffprobe details, trim range, frame estimate, live progress, cancel,
   result banner with Open Folder, PNG/JPEG. 30 tests, clippy clean.
-  Since: New Job (2026-07-31), drag and drop (2026-08-01).
+  Since: New Job (2026-07-31), drag and drop (2026-08-01), scrub preview and
+  filmstrip (2026-08-13), arrow-key timecode stepping (2026-08-13). 54 tests.
 - **M2 — next.** In rough order:
   1. Excludes-style **backlog polish**: remember the output folder between
      runs, and re-request it through the portal on the next launch
@@ -147,6 +230,10 @@ reach the network even if the sandbox let it.
   4. **More output formats** — AVIF, WebP, TIFF. Sized and measured already;
      see §8 for the numbers, the per-format argv shapes and the test list
   5. **Batch** — a queue of videos sharing one set of settings
+  6. **Trim and export the video itself** (`-c copy`) — *proposed, not agreed*.
+     The range controls already describe a cut; this would write it out as
+     video instead of as frames. Measured and specced in §8, including the
+     scope question it raises against §1
 - **M3 — distribution.** AppStream screenshots, GitHub Pages landing page,
   first `.flatpak` bundle on GitHub Releases. Flathub is not the target, same
   decision as Foresight and Vitrine.
@@ -261,10 +348,52 @@ that the estimator and progress still agree with reality; and that the
 sandboxed build really has the encoder after the configure flags change
 (`flatpak run --command=ffmpeg … -encoders`).
 
+### Trim and export the video (M2.6) — measured 2026-08-13, to be discussed
+
+Once a range can be picked by eye on a filmstrip, the app is most of a snippet
+tool already. `ffmpeg -ss START -to END -i IN -c copy OUT.mp4` remuxes without
+re-encoding: near-instant, no quality loss, no encoder needed.
+
+**Three things have to be settled before this is worth building.**
+
+**1. It cannot cut where you asked.** Stream copy can only start on a keyframe,
+because everything after one is decoded relative to it. Measured on a 1080p
+h264 screencast whose keyframes fall every 4–6 seconds:
+
+| | |
+| --- | --- |
+| requested start | 20.000 |
+| keyframes either side | 14.857 and 20.900 |
+| **where the copy actually started** | **14.857 — 5.1 s early** |
+
+That is not a bug to fix, it is what stream copy *is*. The honest options are:
+
+- **Snap the handles to keyframes** and show it — the user picks from the cuts
+  that are actually available rather than being silently given a different one.
+  Keyframe positions are one `ffprobe -skip_frame nokey` away, and the
+  filmstrip is exactly the place to draw them.
+- **Re-encode**, which cuts anywhere but is slow and lossy, and drags in
+  encoder selection, bitrate and every other transcoder question.
+- **Smart cut** — re-encode only the leading partial GOP, copy the rest. This
+  is what real editors do and it is a substantial amount of work.
+
+The first is the only one that fits this app.
+
+**2. The bundle cannot write video today.** ffmpeg is configured
+`--disable-muxers --enable-muxer=image2,image2pipe`, so there is nowhere to put
+an mp4. Enabling `mp4,mov,matroska,webm` is cheap — copy needs no *encoders*,
+which is the expensive tier — but it must be verified in the sandbox, not
+assumed, exactly as §8's format work requires.
+
+**3. It argues with §1.** "Not a video editor, not a transcoder." A stream copy
+is neither — it is a remux, and it writes what was already there. But the row
+after it is always "can I re-encode smaller", and that is the line. **The
+question to answer first is whether trimming video is this tool's job at all,
+or whether it belongs in a sibling app that shares the engine crate.**
+
 ### Other
 
 - Scene-change sampling (`-vf select='gt(scene,0.4)'`) as a mode next to fps
-- Start-of-range preview thumbnail, so a trim can be aimed
 - Contact-sheet output (`-vf tile=`)
 - Remember the last used settings (a KeyFile under `<config>/muybridge/`,
   paths deliberately excluded — the same rule Foresight's presets follow)
