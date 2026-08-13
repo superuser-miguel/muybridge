@@ -27,3 +27,7 @@ Cargo.lock.orig
 # Screenshots dropped in while diagnosing something on screen. Useful in the
 # moment, not part of the source — AppStream screenshots live in data/.
 /Troubleshooting
+
+# Scratch tree used by build-aux/publish-repo.sh (must sit on the same
+# filesystem as the flatpak-builder state dir, so it cannot live in /tmp).
+/.publish-tmp.*
