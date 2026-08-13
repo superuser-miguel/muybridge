@@ -1,0 +1,128 @@
+# Flatpak RELEASE manifest — Muybridge. Builds fully OFFLINE from the pinned
+# release tag + the vendored crate graph (cargo-sources.json), for the
+# `.flatpak` bundle published on GitHub Releases:
+#
+#   flatpak-builder --user --force-clean --repo=repo-release build-dir-release \
+#     io.github.superuser_miguel.Muybridge.release.yml
+#   flatpak build-bundle repo-release Muybridge.flatpak \
+#     io.github.superuser_miguel.Muybridge stable \
+#     --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+#
+# The trailing `stable` is required: build-bundle defaults to the master ref
+# regardless of what the manifest built, so omitting it fails outright once
+# `branch: stable` is set below.
+#
+# Regenerate cargo-sources.json whenever Cargo.lock changes:
+#   python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+# (from flatpak-builder-tools; needs a venv with tomlkit + aiohttp — tomlkit
+# now, NOT toml.)
+#
+# Local dev iteration uses io.github.superuser_miguel.Muybridge.yml instead
+# (dir source, build-time network, no vendoring).
+
+id: io.github.superuser_miguel.Muybridge
+
+# Published bundles MUST stay on `stable`. flatpak-builder defaults to
+# `master`, and a bundle on a different branch installs *alongside* the one a
+# user already has rather than upgrading it — leaving two Muybridges and an
+# ambiguous `flatpak run`. The dev manifest deliberately stays on master, which
+# is what keeps a local `flatpak-builder --install` from clobbering the real
+# install.
+branch: stable
+
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: muybridge
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/muybridge/cargo
+  # No build-args: this build runs with NO network. cargo resolves entirely
+  # from the vendored crate graph, via the source-replacement config that
+  # cargo-sources.json drops into CARGO_HOME.
+
+finish-args:
+  # -- display / input ------------------------------------------------------
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc                       # required by the X11 fallback
+  - --device=dri                      # GPU rendering for GTK4/GSK
+
+  # NOTE deliberately ABSENT (portals-first):
+  #   --filesystem=home / host    -> the video and the output folder arrive
+  #                                  through the FileChooser portal, and the
+  #                                  app sees nothing else on disk. Files'
+  #                                  "Open With" works through the document
+  #                                  portal, which needs no permission either.
+  #   --share=network             -> nothing here talks to the network, and
+  #                                  ffmpeg is built with networking disabled
+
+modules:
+  # ---------------------------------------------------------------- ffmpeg
+  # The engine. Trimmed to what this app actually does: decode anything the
+  # user has, write PNG or JPEG image sequences. image2pipe is what the scrub
+  # preview reads single frames back through, so it is load-bearing for the
+  # filmstrip as well as for extraction.
+  #
+  # dav1d comes from the runtime, so AV1 decodes at a sensible speed; nasm is
+  # in the Sdk, so the x86 assembly optimisations stay enabled.
+  #
+  # sha256 is of the official https://ffmpeg.org tarball. Bumping the version
+  # means recomputing it — ffmpeg.org publishes no .sha256 sidecar.
+  - name: ffmpeg
+    buildsystem: simple
+    build-commands:
+      - ./configure
+        --prefix=/app
+        --disable-static
+        --enable-shared
+        --disable-doc
+        --disable-debug
+        --disable-ffplay
+        --disable-avdevice
+        --disable-network
+        --disable-encoders
+        --enable-encoder=png,mjpeg
+        --disable-muxers
+        --enable-muxer=image2,image2pipe
+        --enable-libdav1d
+      - make -j $FLATPAK_BUILDER_N_JOBS
+      - make install
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/ffmpeg/examples
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+        sha256: 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+
+  # ---------------------------------------------------------------- blueprint
+  # Compiles .blp UI files at build time; not needed at runtime.
+  - name: blueprint-compiler
+    buildsystem: meson
+    cleanup: ['*']
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/GNOME/blueprint-compiler.git
+        tag: v0.18.0
+
+  # ---------------------------------------------------------------- the app
+  - name: muybridge
+    buildsystem: meson
+    sources:
+      # The tagged release, pinned by tag *and* commit so the build is
+      # reproducible even if the tag were ever moved. Local testing can swap in
+      # {type: dir, path: .}.
+      #
+      # The commit pin necessarily lands in the commit *after* the tag it names
+      # — the same benign circularity as the other house projects.
+      - type: git
+        url: https://github.com/superuser-miguel/muybridge.git
+        tag: v0.1.0
+        commit: PLACEHOLDER_FILLED_IN_AFTER_TAGGING
+      - cargo-sources.json
