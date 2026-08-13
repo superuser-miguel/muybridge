@@ -385,11 +385,20 @@ an mp4. Enabling `mp4,mov,matroska,webm` is cheap — copy needs no *encoders*,
 which is the expensive tier — but it must be verified in the sandbox, not
 assumed, exactly as §8's format work requires.
 
-**3. It argues with §1.** "Not a video editor, not a transcoder." A stream copy
-is neither — it is a remux, and it writes what was already there. But the row
-after it is always "can I re-encode smaller", and that is the line. **The
-question to answer first is whether trimming video is this tool's job at all,
-or whether it belongs in a sibling app that shares the engine crate.**
+**3. It argues with §1, and another project already claims it.** "Not a video
+editor, not a transcoder." A stream copy is neither — it is a remux, and it
+writes what was already there. But the row after it is always "can I re-encode
+smaller", and that is the line.
+
+More to the point, **Montage** (`~/my-progs/montage`, concept-stage, drafted
+2026-08-12) is scoped as a GNOME-native video editor that *starts life as a
+lossless cutter* — this exact feature, with an engine built for it. The
+counter-argument is that the filmstrip and range controls already exist *here*
+while Montage has no code yet.
+
+**So the question to settle first is not how to build it, but where it lives.**
+If the answer is Montage, the keyframe measurement above is an input to that
+project rather than this one.
 
 ### Other
 
